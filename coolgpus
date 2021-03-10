@@ -19,6 +19,7 @@ I can't claim it's optimal, but it Works For My Machine (TM). Full load is about
 ''')
 parser.add_argument('--temp', nargs='+', default=[55, 80], type=float, help='The temperature ranges where the fan speed will increase linearly')
 parser.add_argument('--speed', nargs='+', default=[30, 99], type=float, help='The fan speed ranges')
+parser.add_argument('--retries', nargs=1, default=3, type=int, help='Number of retries before raising an exception when fan management fails.')
 parser.add_argument('--hyst', nargs='?', default=2, type=float, help='The hysteresis gap. Large gaps will reduce how often the fan speed is changed, but might mean the fan runs faster than necessary')
 parser.add_argument('--kill', action='store_true', default=False, help='Whether to kill existing Xorg sessions')
 parser.add_argument('--verbose', action='store_true', default=False, help='Whether to print extra debugging information')
@@ -230,16 +231,26 @@ def manage_fans(displays):
     X servers"""
     try:
         speeds = {b: 0 for b in displays}
+        num_consecutive_failures = 0
         while True:
-            for bus, display in displays.items():
-                temp = temperature(bus)
-                s, l, u = target_speed(speeds[bus], temp)
-                if s != speeds[bus]:
-                    print('GPU {}, {}C -> [{}%-{}%]. Setting speed to {}%'.format(display, temp, l, u, s))
-                    set_speed(display, s)
-                    speeds[bus] = s
-                else:
-                    print('GPU {}, {}C -> [{}%-{}%]. Leaving speed at {}%'.format(display, temp, l, u, s))
+            try:
+                for bus, display in displays.items():
+                    temp = temperature(bus)
+                    s, l, u = target_speed(speeds[bus], temp)
+                    if s != speeds[bus]:
+                        print('GPU {}, {}C -> [{}%-{}%]. Setting speed to {}%'.format(display, temp, l, u, s))
+                        set_speed(display, s)
+                        speeds[bus] = s
+                    else:
+                        print('GPU {}, {}C -> [{}%-{}%]. Leaving speed at {}%'.format(display, temp, l, u, s))
+                num_consecutive_failures = 0
+            except Exception as e:
+                num_consecutive_failures += 1
+                print("Error managing fan speed: %s" % e)
+                num_retries = num_consecutive_failures - 1
+                if num_retries >= args.retries:
+                    raise
+                print("Will retry %d more times before giving up" % (args.retries-num_retries))
             time.sleep(5)
     finally:
         for bus, display in displays.items():
